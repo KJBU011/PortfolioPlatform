@@ -1,0 +1,25 @@
+# java / maven
+target/
+*.class
+
+# vite cache
+.vite/
+
+# node (client)
+client/node_modules/
+client/dist/
+
+# env (Supabase URL/keys — 절대 커밋 금지)
+client/.env
+client/.env.local
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*

@@ -1,0 +1,30 @@
+{
+  "name": "portfolio-platform",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "읽는 포트폴리오가 아니라 직접 체험할 수 있는 개발자 포트폴리오 플랫폼",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit -p tsconfig.app.json",
+    "supabase:check": "node scripts/check-supabase.mjs",
+    "supabase:seed": "node scripts/seed-supabase.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "lucide-vue-next": "^0.454.0",
+    "pinia": "^2.2.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vue-tsc": "^2.1.10"
+  }
+}
