@@ -6,13 +6,16 @@ import {
   Database, FolderKanban, Layers, History, Globe, MonitorPlay, AtSign,
 } from 'lucide-vue-next'
 import type { Session } from '@supabase/supabase-js'
-import type { Project, ProjectCategory, ProjectLink, StackGroup, TimelineItem, DemoType } from '@/types/project'
+import type { Project, ProjectCategory, ProjectLink, StackGroup, TimelineItem, DemoType, ErdTable, DetailSectionKey } from '@/types/project'
+import ErdDiagram from '@/components/project/ErdDiagram.vue'
+import ArchitectureDiagram from '@/components/project/ArchitectureDiagram.vue'
 import { interestOptions } from '@/data/profile'
 import { usePortfolioStore, ownerUsername } from '@/stores/portfolio'
 import {
   getSession, onAuthChange, signOut, fetchMyPortfolio, updatePassword,
   isUsernameTaken, setMyUsername, isSupabaseConfigured, type MyPortfolioRow,
 } from '@/lib/auth'
+import MonthPicker from '@/components/common/MonthPicker.vue'
 import { supabase } from '@/lib/supabase'
 import { writeOverride, clearAllOverrides, pushToSupabase, type ContentKey } from '@/lib/content'
 import type { DemoDetection, DemoAlert } from '@/data/demo'
@@ -65,6 +68,7 @@ async function claim() {
   }
   // 현재 화면의 콘텐츠를 초기 템플릿으로 내 행 생성 (mock 개인정보는 비워서 시작)
   const tpl = JSON.parse(JSON.stringify(store.blocks))
+  cleanGalleries(tpl.projects ?? [])
   tpl.siteConfig = {
     ...tpl.siteConfig,
     name: '', email: '', github: '', linkedin: '',
@@ -116,7 +120,23 @@ function flash(msg: string, err = false) {
 
 // ─── 프로젝트 편집 ───
 const categories: ProjectCategory[] = ['AI / Computer Vision', 'Backend / Platform', 'Data / Monitoring']
+/** mock 시절 빈 문자열 플레이스홀더('') 제거 — 실제 URL만 유지 + 신필드 기본값 보장 */
+function cleanGalleries(projects: Project[]) {
+  projects.forEach((p) => {
+    p.gallery = (p.gallery ?? []).map((s) => (s ?? '').trim()).filter(Boolean)
+    p.architectureImage ??= ''
+    p.erdTables ??= []
+    p.erdNote ??= ''
+    p.architecture ??= []
+    const sv = (p.sectionVisibility ?? {}) as Partial<Record<DetailSectionKey, boolean>>
+    p.sectionVisibility = {
+      overview: true, features: true, pipeline: true, system: true, erd: true,
+      ...sv,
+    }
+  })
+}
 const editing = ref<Project[]>(clone(store.blocks.projects))
+cleanGalleries(editing.value)
 const selectedSlug = ref(editing.value[0]?.slug ?? '')
 const cur = computed(() => editing.value.find((p) => p.slug === selectedSlug.value))
 const newSlug = ref('')
@@ -157,15 +177,61 @@ const failuresJson = computed({
     catch { jsonError.value = 'failureCases JSON 파싱 실패' }
   },
 })
+const erdJson = computed({
+  get: () => JSON.stringify(cur.value?.erdTables ?? [], null, 2),
+  set: (raw: string) => {
+    try {
+      const v = JSON.parse(raw)
+      if (!Array.isArray(v)) throw new Error('not array')
+      if (cur.value) cur.value.erdTables = v as ErdTable[]
+      jsonError.value = ''
+    }
+    catch { jsonError.value = 'erdTables JSON 파싱 실패 (ErdTable 배열 형태여야 합니다)' }
+  },
+})
+/** ERD 실시간 미리보기 (파싱 실패 시 null) */
+const erdPreview = computed<ErdTable[] | null>(() => {
+  const t = cur.value?.erdTables
+  return Array.isArray(t) ? t : null
+})
+
+// ─── ERD 직접 등록 (테이블 × 컬럼: 자료형 + PK/FK/UK 체크) ───
+const erdColTypes = [
+  'bigint', 'int', 'serial', 'bigserial', 'varchar', 'varchar(255)', 'text',
+  'boolean', 'timestamp', 'timestamptz', 'date', 'numeric', 'jsonb', 'uuid',
+  'geometry', 'bytea',
+]
+
+function addErdTable() {
+  cur.value?.erdTables.push({ name: '', comment: '', columns: [{ name: 'id', type: 'bigint', pk: true }] })
+}
+function delErdTable(ti: number) {
+  cur.value?.erdTables.splice(ti, 1)
+}
+function moveErdTable(ti: number, d: number) {
+  const a = cur.value?.erdTables
+  if (!a) return
+  const j = ti + d
+  if (j < 0 || j >= a.length) return
+  ;[a[ti], a[j]] = [a[j], a[ti]]
+}
+function addErdColumn(ti: number) {
+  cur.value?.erdTables[ti]?.columns.push({ name: '', type: 'text' })
+}
+function delErdColumn(ti: number, ci: number) {
+  cur.value?.erdTables[ti]?.columns.splice(ci, 1)
+}
+function moveErdColumn(ti: number, ci: number, d: number) {
+  const cols = cur.value?.erdTables[ti]?.columns
+  if (!cols) return
+  const j = ci + d
+  if (j < 0 || j >= cols.length) return
+  ;[cols[ci], cols[j]] = [cols[j], cols[ci]]
+}
 const tagsCsv = computed({
   get: () => (cur.value?.tags ?? []).join(', '),
   set: (raw: string) => { if (cur.value) cur.value.tags = raw.split(',').map((s) => s.trim()).filter(Boolean) },
 })
-const galleryCsv = computed({
-  get: () => (cur.value?.gallery ?? []).join(', '),
-  set: (raw: string) => { if (cur.value) cur.value.gallery = raw.split(',').map((s) => s.trim()) },
-})
-
 function addProject() {
   const slug = newSlug.value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-')
   if (!slug) return flash('새 slug를 입력하세요.', true)
@@ -175,6 +241,8 @@ function addProject() {
     tags: [], thumbnail: '', period: '', team: '', role: '', purpose: '',
     links: [], features: [], pipeline: [], versions: [], failureCases: [],
     failureMessage: '', gallery: [], featured: false,
+    architectureImage: '', erdTables: [], erdNote: '', architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   })
   selectedSlug.value = slug
   newSlug.value = ''
@@ -196,15 +264,20 @@ const werr = ref('')
 const wform = ref({
   title: '', slug: '', category: categories[0] as ProjectCategory,
   short: '', description: '', tags: '', period: '', team: '', role: '', purpose: '',
-  demoType: 'internal' as DemoType, demoUrl: '',
+  demoType: 'internal' as DemoType, demoUrl: '', thumbnail: '', gallery: [] as string[],
 })
 
 function openWizard() {
   wform.value = {
     title: '', slug: '', category: categories[0],
     short: '', description: '', tags: '', period: '', team: '', role: '', purpose: '',
-    demoType: 'internal', demoUrl: '',
+    demoType: 'internal', demoUrl: '', thumbnail: '', gallery: [],
   }
+  thumbMsg.value = ''
+  thumbErr.value = false
+  mediaMsg.value = ''
+  mediaErr.value = false
+  mediaUrl.value = ''
   wstep.value = 1
   werr.value = ''
   wizardOpen.value = true
@@ -257,17 +330,101 @@ function wizardSave() {
     slug: f.slug, category: f.category, title: f.title.trim(), short: f.short.trim(),
     description: f.description.trim(),
     tags: f.tags.split(',').map((s) => s.trim()).filter(Boolean),
-    thumbnail: '', period: f.period.trim(), team: f.team.trim(), role: f.role.trim(),
-    purpose: f.purpose.trim(), links,
+    thumbnail: f.thumbnail.trim(), period: f.period.trim(), team: f.team.trim(), role: f.role.trim(),
+    purpose: f.purpose.trim(),
+    gallery: f.gallery.map((u) => u.trim()).filter(Boolean),
+    links,
     demoType: f.demoType === 'none' ? 'none' : f.demoType,
     demoUrl: f.demoUrl.trim() || undefined,
     features: [], pipeline: [], versions: [], failureCases: [],
-    failureMessage: '', gallery: [], featured: false,
+    failureMessage: '', featured: false,
+    architectureImage: '', erdTables: [], erdNote: '', architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   })
   selectedSlug.value = f.slug
   wizardOpen.value = false
   flash(`등록됨: ${f.slug} — 상단의 전체 저장 버튼을 눌러 반영하세요.`)
 }
+
+// ─── 기간(연·월 달력 선택) ───
+// 표시 형식 유지: "2024.03 — 2024.11 (9개월)" / "2024.03 — 진행 중" (Project 타입은 string 그대로)
+interface PeriodMonths { start: string; end: string; ongoing: boolean }
+
+function parsePeriod(s: string): PeriodMonths {
+  const ongoing = /진행\s*중|진행중|현재|ongoing|present/i.test(s)
+  const found: string[] = []
+  for (const m of s.matchAll(/(\d{4})\s*[.\-/년]?\s*(\d{1,2})?/g)) {
+    const y = Number(m[1])
+    if (y < 1900 || y > 2100) continue
+    let mo = m[2] ? Number(m[2]) : 1
+    if (Number.isNaN(mo) || mo < 1) mo = 1
+    if (mo > 12) continue
+    found.push(`${y}-${String(mo).padStart(2, '0')}`)
+    if (found.length >= 2) break
+  }
+  return { start: found[0] ?? '', end: ongoing ? '' : (found[1] ?? ''), ongoing }
+}
+
+function dispMonth(ym: string) {
+  const [y, m] = ym.split('-')
+  return `${y}.${m}`
+}
+
+function formatPeriod(start: string, end: string, ongoing: boolean): string {
+  if (!start && !end) return ongoing ? '진행 중' : ''
+  if (start && ongoing) return `${dispMonth(start)} — 진행 중`
+  if (start && end) {
+    if (start === end) return dispMonth(start)
+    const [sy, sm] = start.split('-').map(Number)
+    const [ey, em] = end.split('-').map(Number)
+    const n = (ey - sy) * 12 + (em - sm) + 1
+    return n > 0 ? `${dispMonth(start)} — ${dispMonth(end)} (${n}개월)` : `${dispMonth(start)} — ${dispMonth(end)}`
+  }
+  return dispMonth(start || end)
+}
+
+function setPeriodPart(raw: string, part: 'start' | 'end' | 'ongoing', value: string | boolean): string {
+  const p = parsePeriod(raw)
+  if (part === 'start') p.start = value as string
+  if (part === 'end') {
+    p.end = value as string
+    if (p.end) p.ongoing = false
+  }
+  if (part === 'ongoing') {
+    p.ongoing = value as boolean
+    if (p.ongoing) p.end = ''
+  }
+  if (p.end && p.start && p.end < p.start) p.end = p.start
+  return formatPeriod(p.start, p.end, p.ongoing)
+}
+
+// 기존 프로젝트 편집용 (선택 변경 시 cur.period 문자열로 합성)
+const editStart = computed({
+  get: () => parsePeriod(cur.value?.period ?? '').start,
+  set: (v: string) => { if (cur.value) cur.value.period = setPeriodPart(cur.value.period, 'start', v) },
+})
+const editEnd = computed({
+  get: () => parsePeriod(cur.value?.period ?? '').end,
+  set: (v: string) => { if (cur.value) cur.value.period = setPeriodPart(cur.value.period, 'end', v) },
+})
+const editOngoing = computed({
+  get: () => parsePeriod(cur.value?.period ?? '').ongoing,
+  set: (v: boolean) => { if (cur.value) cur.value.period = setPeriodPart(cur.value.period, 'ongoing', v) },
+})
+
+// 등록 마법사용 (wform.period 문자열로 합성)
+const wizStart = computed({
+  get: () => parsePeriod(wform.value.period).start,
+  set: (v: string) => { wform.value.period = setPeriodPart(wform.value.period, 'start', v) },
+})
+const wizEnd = computed({
+  get: () => parsePeriod(wform.value.period).end,
+  set: (v: string) => { wform.value.period = setPeriodPart(wform.value.period, 'end', v) },
+})
+const wizOngoing = computed({
+  get: () => parsePeriod(wform.value.period).ongoing,
+  set: (v: boolean) => { wform.value.period = setPeriodPart(wform.value.period, 'ongoing', v) },
+})
 
 // ─── 스택 / 경력 편집 ───
 interface StackItemEdit { text: string; on: boolean }
@@ -299,50 +456,56 @@ function toggleInterest(opt: { icon: string; title: string; desc: string }) {
   else interestsEdit.value.push({ ...opt })
 }
 
-// ─── 사이트 이미지 업로드 (Supabase Storage: profile-images/{user_id}/{profile|hero}) ───
+// ─── 이미지 업로드 (Supabase Storage: profile-images/{user_id}/… — 사이트 설정과 동일 방식) ───
 const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadErr = ref(false)
+const thumbUploading = ref(false)
+const thumbMsg = ref('')
+const thumbErr = ref(false)
+
+function validateImageFile(file: File): string {
+  if (!file.type.startsWith('image/')) return '이미지 파일만 올릴 수 있습니다.'
+  if (file.size > 5 * 1024 * 1024) return '5MB 이하만 올릴 수 있습니다.'
+  return ''
+}
+
+function bucketMissing(msg: string) {
+  return /bucket|Bucket|not found/i.test(msg)
+    ? '저장소 미설정 — supabase/migrations/20260214000000_profile_images_bucket.sql을 대시보드 SQL Editor에서 1회 실행하세요.'
+    : `업로드 실패: ${msg}`
+}
+
+/** 사이트 설정과 같은 방식: upsert 업로드 후 public URL 반환 */
+async function uploadToStorage(file: File, path: string): Promise<string> {
+  if (!session.value || !supabase) throw new Error('로그인이 필요합니다.')
+  const reason = validateImageFile(file)
+  if (reason) throw new Error(reason)
+  const { error } = await supabase.storage
+    .from('profile-images')
+    .upload(path, file, { upsert: true, contentType: file.type })
+  if (error) throw error
+  const { data } = supabase.storage.from('profile-images').getPublicUrl(path)
+  return `${data.publicUrl}?t=${Date.now()}`
+}
 
 async function uploadSiteImage(e: Event, siteKey: 'profileImage' | 'heroImage', storageName: 'profile' | 'hero') {
   uploadMsg.value = ''
   uploadErr.value = false
-  const file = (e.target as HTMLInputElement).files?.[0]
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
   if (!file) return
-  if (!session.value || !supabase) {
-    uploadMsg.value = '로그인이 필요합니다.'
-    uploadErr.value = true
-    return
-  }
-  if (!file.type.startsWith('image/')) {
-    uploadMsg.value = '이미지 파일만 올릴 수 있습니다.'
-    uploadErr.value = true
-    return
-  }
-  if (file.size > 5 * 1024 * 1024) {
-    uploadMsg.value = '5MB 이하만 올릴 수 있습니다.'
-    uploadErr.value = true
-    return
-  }
   uploading.value = true
   try {
-    const path = `${session.value.user.id}/${storageName}`
-    const { error } = await supabase.storage
-      .from('profile-images')
-      .upload(path, file, { upsert: true, contentType: file.type })
-    if (error) throw error
-    const { data } = supabase.storage.from('profile-images').getPublicUrl(path)
-    siteEdit.value[siteKey] = `${data.publicUrl}?t=${Date.now()}`
+    if (!session.value) throw new Error('로그인이 필요합니다.')
+    siteEdit.value[siteKey] = await uploadToStorage(file, `${session.value.user.id}/${storageName}`)
     uploadMsg.value = '업로드됨 — 상단의 전체 저장 버튼을 눌러 반영하세요.'
   } catch (err) {
     uploadErr.value = true
-    const msg = (err as Error).message ?? ''
-    uploadMsg.value = /bucket|Bucket|not found/i.test(msg)
-      ? '저장소 미설정 — supabase/migrations/20260214000000_profile_images_bucket.sql을 대시보드 SQL Editor에서 1회 실행하세요.'
-      : `업로드 실패: ${msg}`
+    uploadMsg.value = bucketMissing((err as Error).message ?? '')
   } finally {
     uploading.value = false
-    ;(e.target as HTMLInputElement).value = ''
+    input.value = ''
   }
 }
 
@@ -354,6 +517,209 @@ function uploadHeroImage(e: Event) {
   return uploadSiteImage(e, 'heroImage', 'hero')
 }
 
+/** 프로젝트 이미지 업로드 — 사이트 이미지와 동일 버킷/검증, 경로만 projects/{slug}/{thumbnail|architecture} */
+async function uploadProjectThumbnail(e: Event, target: { value: string }, slugHint: string, storageName = 'thumbnail') {
+  thumbMsg.value = ''
+  thumbErr.value = false
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!session.value) {
+    thumbMsg.value = '로그인이 필요합니다.'
+    thumbErr.value = true
+    return
+  }
+  thumbUploading.value = true
+  try {
+    const slug = slugify(slugHint || target.value || 'new') || 'new'
+    target.value = await uploadToStorage(file, `${session.value.user.id}/projects/${slug}/${storageName}`)
+    thumbMsg.value = '업로드됨 — 상단의 전체 저장(마법사는 등록하기) 버튼을 눌러 반영하세요.'
+  } catch (err) {
+    thumbErr.value = true
+    thumbMsg.value = bucketMissing((err as Error).message ?? '')
+  } finally {
+    thumbUploading.value = false
+    input.value = ''
+  }
+}
+
+function uploadEditThumbnail(e: Event) {
+  if (!cur.value) return
+  // cur.thumbnail은 string이므로 getter/setter 래퍼로 전달
+  const proxy = {
+    get value() { return cur.value!.thumbnail },
+    set value(v: string) { cur.value!.thumbnail = v },
+  }
+  return uploadProjectThumbnail(e, proxy, cur.value.slug)
+}
+
+function uploadEditArchitecture(e: Event) {
+  if (!cur.value) return
+  const proxy = {
+    get value() { return cur.value!.architectureImage },
+    set value(v: string) { cur.value!.architectureImage = v },
+  }
+  return uploadProjectThumbnail(e, proxy, cur.value.slug, 'architecture')
+}
+
+// ─── 시스템 아키텍처 직접 배치 (행 × 노드) ───
+const archIcons = [
+  'cctv', 'brain', 'database', 'server', 'dashboard', 'monitor', 'cloud',
+  'container', 'plug', 'bell', 'activity', 'wrench', 'globe', 'cpu', 'mobile',
+]
+const archPreview = computed(() => (cur.value?.architecture ?? []).filter((r) => (r.nodes ?? []).length > 0))
+
+function addArchRow() {
+  cur.value?.architecture.push({ nodes: [] })
+}
+function delArchRow(ri: number) {
+  cur.value?.architecture.splice(ri, 1)
+}
+function moveArchRow(ri: number, d: number) {
+  const a = cur.value?.architecture
+  if (!a) return
+  const j = ri + d
+  if (j < 0 || j >= a.length) return
+  ;[a[ri], a[j]] = [a[j], a[ri]]
+}
+function addArchNode(ri: number) {
+  cur.value?.architecture[ri]?.nodes.push({ icon: 'server', title: '', subtitle: '', accent: false })
+}
+function delArchNode(ri: number, ni: number) {
+  cur.value?.architecture[ri]?.nodes.splice(ni, 1)
+}
+function moveArchNode(ri: number, ni: number, d: number) {
+  const ns = cur.value?.architecture[ri]?.nodes
+  if (!ns) return
+  const j = ni + d
+  if (j < 0 || j >= ns.length) return
+  ;[ns[ni], ns[j]] = [ns[j], ns[ni]]
+}
+
+function uploadWizardThumbnail(e: Event) {
+  const proxy = {
+    get value() { return wform.value.thumbnail },
+    set value(v: string) { wform.value.thumbnail = v },
+  }
+  return uploadProjectThumbnail(e, proxy, wform.value.slug || wform.value.title)
+}
+
+// ─── 갤러리 미디어 (이미지·시연 영상 업로드 또는 URL) ───
+// 썸네일/사이트 이미지와 동일 버킷(profile-images), 경로는 projects/{slug}/gallery/…(파일별 고유)
+const mediaUploading = ref(false)
+const mediaMsg = ref('')
+const mediaErr = ref(false)
+const mediaUrl = ref('')
+const MAX_GALLERY = 12
+
+function validateMediaFile(file: File): string {
+  if (file.type.startsWith('image/')) {
+    return file.size > 5 * 1024 * 1024 ? '이미지는 5MB 이하만 올릴 수 있습니다.' : ''
+  }
+  if (file.type === 'video/mp4' || file.type === 'video/webm' || file.type === 'video/quicktime') {
+    return file.size > 50 * 1024 * 1024 ? '영상은 50MB 이하만 올릴 수 있습니다.' : ''
+  }
+  return '이미지(jpg/png/webp 등) 또는 영상(mp4/webm) 파일만 올릴 수 있습니다.'
+}
+
+function isVideoUrl(url: string) {
+  return /\.(mp4|webm|mov)(\?|#|$)/i.test(url) || /\/demo-video(\?|#|$)/i.test(url)
+}
+
+function extOf(file: File) {
+  const m = file.name.match(/\.([a-z0-9]+)$/i)
+  if (m) return `.${m[1].toLowerCase()}`
+  if (file.type === 'video/mp4') return '.mp4'
+  if (file.type === 'video/webm') return '.webm'
+  if (file.type === 'video/quicktime') return '.mov'
+  if (file.type === 'image/png') return '.png'
+  if (file.type === 'image/webp') return '.webp'
+  return '.jpg'
+}
+
+async function uploadGalleryFiles(e: Event, list: string[], slugHint: string) {
+  mediaMsg.value = ''
+  mediaErr.value = false
+  const input = e.target as HTMLInputElement
+  const files = [...(input.files ?? [])]
+  if (!files.length) return
+  if (!session.value || !supabase) {
+    mediaMsg.value = '로그인이 필요합니다.'
+    mediaErr.value = true
+    input.value = ''
+    return
+  }
+  if (list.length + files.length > MAX_GALLERY) {
+    mediaMsg.value = `갤러리는 최대 ${MAX_GALLERY}개까지 올릴 수 있습니다.`
+    mediaErr.value = true
+    input.value = ''
+    return
+  }
+  mediaUploading.value = true
+  try {
+    const slug = slugify(slugHint || 'new') || 'new'
+    const base = Date.now()
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const reason = validateMediaFile(file)
+      if (reason) throw new Error(reason)
+      const path = `${session.value.user.id}/projects/${slug}/gallery/${base}-${i}${extOf(file)}`
+      const { error } = await supabase.storage
+        .from('profile-images')
+        .upload(path, file, { upsert: true, contentType: file.type })
+      if (error) throw error
+      const { data } = supabase.storage.from('profile-images').getPublicUrl(path)
+      list.push(`${data.publicUrl}?t=${base}`)
+    }
+    mediaMsg.value = '업로드됨 — 상단의 전체 저장(마법사는 등록하기) 버튼을 눌러 반영하세요.'
+  } catch (err) {
+    mediaErr.value = true
+    mediaMsg.value = bucketMissing((err as Error).message ?? '')
+  } finally {
+    mediaUploading.value = false
+    input.value = ''
+  }
+}
+
+function addGalleryUrl(list: string[]) {
+  mediaMsg.value = ''
+  mediaErr.value = false
+  const u = mediaUrl.value.trim()
+  if (!u) return
+  if (!validUrl(u)) {
+    mediaMsg.value = '올바른 https URL을 입력하세요.'
+    mediaErr.value = true
+    return
+  }
+  if (list.length >= MAX_GALLERY) {
+    mediaMsg.value = `갤러리는 최대 ${MAX_GALLERY}개까지 올릴 수 있습니다.`
+    mediaErr.value = true
+    return
+  }
+  list.push(u)
+  mediaUrl.value = ''
+}
+
+function uploadEditGallery(e: Event) {
+  if (!cur.value) return
+  mediaUrl.value = ''
+  return uploadGalleryFiles(e, cur.value.gallery, cur.value.slug)
+}
+
+function uploadWizardGallery(e: Event) {
+  mediaUrl.value = ''
+  return uploadGalleryFiles(e, wform.value.gallery, wform.value.slug || wform.value.title)
+}
+
+// ─── 상세 공개 섹션 메타 ───
+const sectionMeta: { k: DetailSectionKey; t: string; d: string }[] = [
+  { k: 'overview', t: '프로젝트 개요', d: '기간·인원·역할·목적 표' },
+  { k: 'features', t: '핵심 기능 + 데모 화면', d: '기능 카드·갤러리 뷰어' },
+  { k: 'pipeline', t: 'AI 파이프라인·성능·실패 분석', d: '파이프라인·버전표·실패 사례' },
+  { k: 'system', t: '시스템 아키텍처', d: '직접 배치 → 이미지 → 기본 순 표시' },
+  { k: 'erd', t: 'ERD + API', d: '테이블 다이어그램·API 표·데모 배너' },
+]
+
 // ─── 데모 데이터 편집 ───
 const detEdits = ref<DemoDetection[]>(clone(store.blocks.demoDetections))
 const alertEdits = ref<DemoAlert[]>(clone(store.blocks.demoAlerts))
@@ -361,6 +727,7 @@ const hourlyCsv = ref(store.blocks.demoHourlyCounts.join(', '))
 
 function resetEditors() {
   editing.value = clone(store.blocks.projects)
+  cleanGalleries(editing.value)
   selectedSlug.value = editing.value[0]?.slug ?? ''
   stackEdits.value = toStackEdits(store.blocks.stackGroups)
   careerEdits.value = clone(store.blocks.timeline).map((t) => ({ period: t.period, title: t.title, org: t.org, description: t.description, tagsCsv: (t.tags ?? []).join(', '), current: !!t.current }))
@@ -498,6 +865,26 @@ function reloadPage() {
         </div>
       </div>
 
+      <!-- 우측 플로팅 액션 (스크롤 따라다님) -->
+      <div class="fixed bottom-6 right-6 z-40 flex flex-col gap-2">
+        <button
+          title="전체 저장"
+          aria-label="전체 저장"
+          class="flex h-12 w-12 items-center justify-center rounded-full bg-[#2563EB] text-white shadow-[0_8px_24px_rgba(37,99,235,0.45)] transition-transform hover:scale-105 hover:bg-[#1D4ED8]"
+          @click="saveAll"
+        >
+          <Save :size="20" />
+        </button>
+        <button
+          title="새로고침"
+          aria-label="새로고침"
+          class="flex h-12 w-12 items-center justify-center rounded-full border border-[#E2E8F0] bg-white text-slate-600 shadow-[0_4px_16px_rgba(15,23,42,0.15)] transition-transform hover:scale-105 hover:text-[#2563EB]"
+          @click="reloadPage()"
+        >
+          <RefreshCw :size="20" />
+        </button>
+      </div>
+
       <div class="nice-scroll mt-5 flex gap-2 overflow-x-auto">
         <button
           v-for="t in tabs" :key="t.id"
@@ -513,7 +900,7 @@ function reloadPage() {
         <div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-[#2563EB]/20 bg-[#EFF6FF] px-5 py-4">
           <div>
             <p class="text-[14.5px] font-bold text-slate-900">프로젝트 등록</p>
-            <p class="text-[12.5px] text-slate-600">기본 정보 → 데모 연결(URL) → 확인 3단계. 파일 업로드 없이 URL 등록으로 끝납니다.</p>
+            <p class="text-[12.5px] text-slate-600">기본 정보(썸네일 이미지 업로드 포함) → 데모·미디어 연결(이미지/시연 영상 업로드) → 확인 3단계.</p>
           </div>
           <button class="inline-flex items-center gap-1.5 rounded-[10px] bg-[#2563EB] px-5 py-2.5 text-[13.5px] font-semibold text-white" @click="openWizard">
             <Plus :size="15" /> 새 프로젝트 등록
@@ -548,14 +935,24 @@ function reloadPage() {
           </div>
         </div>
 
-        <div v-if="cur" class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
-          <div class="flex items-center justify-between">
+        <div v-if="cur" class="flex flex-col gap-4">
+          <div class="flex items-center justify-between rounded-[14px] border border-[#E2E8F0] bg-white px-6 py-4">
             <h2 class="font-mono text-[13px] text-[#64748B]">/{{ cur.slug }}</h2>
             <button class="inline-flex items-center gap-1.5 rounded-[10px] border border-red-200 px-3 py-1.5 text-[12.5px] font-semibold text-red-600" @click="deleteProject">
               <Trash2 :size="14" /> 삭제
             </button>
           </div>
-          <div class="mt-4 grid gap-4 md:grid-cols-2">
+
+          <!-- ① 기본 정보 -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">1</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">기본 정보</h3>
+                <p class="text-[12.5px] text-[#64748B]">카드·상세 상단·개요 표에 표시되는 내용</p>
+              </div>
+            </div>
+          <div class="mt-1 grid gap-4 md:grid-cols-2">
             <label :class="labelCls">제목<input v-model="cur.title" :class="inputCls" /></label>
             <label :class="labelCls">카테고리
               <select v-model="cur.category" :class="inputCls">
@@ -565,12 +962,121 @@ function reloadPage() {
             <label :class="labelCls" class="md:col-span-2">짧은 설명<input v-model="cur.short" :class="inputCls" /></label>
             <label :class="labelCls" class="md:col-span-2">상세 설명<textarea v-model="cur.description" rows="3" :class="inputCls" /></label>
             <label :class="labelCls">태그 (쉼표 구분)<input v-model="tagsCsv" :class="inputCls" /></label>
-            <label :class="labelCls">썸네일 URL<input v-model="cur.thumbnail" :class="inputCls" /></label>
-            <label :class="labelCls">기간<input v-model="cur.period" :class="inputCls" /></label>
+            <div :class="labelCls">기간 (달력에서 연·월 선택)
+              <div class="mt-1 flex flex-wrap items-center gap-2">
+                <MonthPicker v-model="editStart" placeholder="시작 연·월" />
+                <span class="font-normal text-slate-400">~</span>
+                <MonthPicker v-model="editEnd" placeholder="종료 연·월" :disabled="editOngoing" />
+                <label class="flex cursor-pointer items-center gap-1.5 text-[12.5px] font-bold text-slate-600">
+                  <input v-model="editOngoing" type="checkbox" class="h-4 w-4 accent-[#2563EB]" /> 진행 중
+                </label>
+              </div>
+              <input v-model="cur.period" placeholder="2024.03 — 2024.11" :class="inputCls" class="font-mono" />
+            </div>
             <label :class="labelCls">개발 인원<input v-model="cur.team" :class="inputCls" /></label>
             <label :class="labelCls" class="md:col-span-2">주요 역할<input v-model="cur.role" :class="inputCls" /></label>
             <label :class="labelCls" class="md:col-span-2">개발 목적<textarea v-model="cur.purpose" rows="2" :class="inputCls" /></label>
-            <label :class="labelCls">갤러리 (쉼표 구분 URL)<input v-model="galleryCsv" :class="inputCls" /></label>
+          </div>
+          </div>
+
+          <!-- ② 상세 공개 설정 -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">2</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">상세 공개 설정</h3>
+                <p class="text-[12.5px] text-[#64748B]">체크 해제한 섹션은 상세 페이지에서 숨겨집니다 (헤더·소개는 항상 표시)</p>
+              </div>
+            </div>
+            <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <label
+                v-for="s in sectionMeta" :key="s.k"
+                :class="['flex cursor-pointer items-start gap-2.5 rounded-[12px] border p-3.5', cur.sectionVisibility[s.k] ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] opacity-70']"
+              >
+                <input v-model="cur.sectionVisibility[s.k]" type="checkbox" class="mt-0.5 h-4 w-4 shrink-0 accent-[#2563EB]" />
+                <span>
+                  <span class="block text-[13.5px] font-bold" :class="cur.sectionVisibility[s.k] ? 'text-[#1D4ED8]' : 'text-slate-500'">{{ s.t }}</span>
+                  <span class="mt-0.5 block text-[12px] text-[#64748B]">{{ s.d }}</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- ③ 미디어·데모 -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">3</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">미디어·데모</h3>
+                <p class="text-[12.5px] text-[#64748B]">썸네일·갤러리·데모 연결 (데모 화면 영역에 표시)</p>
+              </div>
+            </div>
+          <div class="mt-1 grid gap-4 md:grid-cols-2">
+            <div :class="labelCls" class="md:col-span-2">썸네일 이미지
+              <img
+                v-if="cur.thumbnail"
+                :src="cur.thumbnail"
+                alt="썸네일 미리보기"
+                class="mt-1 aspect-[16/9] w-full rounded-[10px] border border-[#E2E8F0] object-cover"
+              />
+              <div v-else class="mt-1 flex aspect-[16/9] w-full items-center justify-center rounded-[10px] bg-[#F1F5F9] text-[12px] font-normal text-slate-400">
+                없음 — 카드·상세 상단에 플레이스홀더가 표시됩니다
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#0F172A] px-4 py-2 text-[13px] font-semibold text-white">
+                  {{ thumbUploading ? '업로드 중…' : '이미지 업로드' }}
+                  <input type="file" accept="image/*" class="hidden" :disabled="thumbUploading" @change="uploadEditThumbnail" />
+                </label>
+                <button
+                  v-if="cur.thumbnail"
+                  class="rounded-[10px] border border-[#E2E8F0] bg-white px-4 py-2 text-[13px] font-semibold text-slate-500"
+                  @click="cur.thumbnail = ''"
+                >
+                  지우기
+                </button>
+              </div>
+              <p v-if="thumbMsg" class="mt-1.5 text-[12.5px] font-medium" :class="thumbErr ? 'text-red-600' : 'text-emerald-600'">{{ thumbMsg }}</p>
+              <input v-model="cur.thumbnail" placeholder="https://… 또는 업로드 (jpg/png/webp, 5MB 이하)" :class="inputCls" class="font-mono" />
+            </div>
+            <div :class="labelCls" class="md:col-span-2">갤러리 (이미지·시연 영상, 최대 {{ MAX_GALLERY }}개)
+              <div v-if="cur.gallery.length" class="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <div v-for="(g, i) in cur.gallery" :key="g + i" class="group relative overflow-hidden rounded-[10px] border border-[#E2E8F0]">
+                  <video v-if="isVideoUrl(g)" :src="g" controls preload="metadata" class="aspect-[16/9] w-full bg-black object-cover" />
+                  <img v-else :src="g" alt="갤러리 미리보기" class="aspect-[16/9] w-full object-cover" />
+                  <button
+                    class="absolute right-1.5 top-1.5 rounded-[8px] bg-black/60 px-2 py-1 text-[11.5px] font-bold text-white opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+                    @click="cur.gallery.splice(i, 1)"
+                  >
+                    삭제
+                  </button>
+                </div>
+              </div>
+              <div v-else class="mt-1 flex aspect-[16/6] w-full items-center justify-center rounded-[10px] bg-[#F1F5F9] text-[12px] font-normal text-slate-400">
+                없음 — 상세 페이지 데모 화면에 플레이스홀더가 표시됩니다
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#0F172A] px-4 py-2 text-[13px] font-semibold text-white">
+                  {{ mediaUploading ? '업로드 중…' : '이미지 업로드' }}
+                  <input type="file" accept="image/*" multiple class="hidden" :disabled="mediaUploading" @change="uploadEditGallery" />
+                </label>
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#2563EB] px-4 py-2 text-[13px] font-semibold text-white">
+                  {{ mediaUploading ? '업로드 중…' : '시연 영상 업로드' }}
+                  <input type="file" accept="video/mp4,video/webm,video/quicktime" multiple class="hidden" :disabled="mediaUploading" @change="uploadEditGallery" />
+                </label>
+              </div>
+              <div class="mt-2 flex gap-1.5">
+                <input
+                  v-model="mediaUrl"
+                  placeholder="https://… 이미지·영상 URL 직접 추가 후 +"
+                  :class="inputCls" class="mt-0 flex-1 font-mono"
+                  @keyup.enter="addGalleryUrl(cur.gallery)"
+                />
+                <button class="mt-0 shrink-0 rounded-[10px] bg-[#0F172A] px-3 text-white" title="URL 추가" @click="addGalleryUrl(cur.gallery)">
+                  <Plus :size="16" />
+                </button>
+              </div>
+              <p v-if="mediaMsg" class="mt-1.5 text-[12.5px] font-medium" :class="mediaErr ? 'text-red-600' : 'text-emerald-600'">{{ mediaMsg }}</p>
+            </div>
             <label class="flex items-center gap-2 text-[13px] font-bold text-slate-700">
               <input v-model="cur.featured" type="checkbox" class="h-4 w-4 accent-[#2563EB]" /> Home 주요 프로젝트에 노출
             </label>
@@ -584,13 +1090,180 @@ function reloadPage() {
             </label>
             <label :class="labelCls">데모 URL<input v-model="cur.demoUrl" placeholder="https://… (external/huggingface일 때)" :class="inputCls" /></label>
           </div>
-          <div class="mt-4 grid gap-4 md:grid-cols-2">
+          </div>
+
+          <!-- ④ 상세 내용 -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">4</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">상세 내용</h3>
+                <p class="text-[12.5px] text-[#64748B]">핵심 기능·파이프라인·성능·실패 분석 (JSON)</p>
+              </div>
+            </div>
+          <div class="mt-1 grid gap-4 md:grid-cols-2">
             <label :class="labelCls">links (JSON)<textarea v-model="linksJson" rows="5" :class="jsonCls" spellcheck="false" /></label>
             <label :class="labelCls">features (JSON)<textarea v-model="featuresJson" rows="5" :class="jsonCls" spellcheck="false" /></label>
             <label :class="labelCls">pipeline (JSON)<textarea v-model="pipelineJson" rows="5" :class="jsonCls" spellcheck="false" /></label>
             <label :class="labelCls">versions (JSON)<textarea v-model="versionsJson" rows="5" :class="jsonCls" spellcheck="false" /></label>
             <label :class="labelCls" class="md:col-span-2">failureCases (JSON)<textarea v-model="failuresJson" rows="4" :class="jsonCls" spellcheck="false" /></label>
             <label :class="labelCls" class="md:col-span-2">실패 분석 강조 문구<textarea v-model="cur.failureMessage" rows="2" :class="inputCls" /></label>
+          </div>
+          </div>
+
+          <!-- ⑤ 시스템 아키텍처 -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">5</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">시스템 아키텍처</h3>
+                <p class="text-[12.5px] text-[#64748B]">직접 배치 → 이미지 → 기본 순으로 상세에 표시</p>
+              </div>
+            </div>
+            <div :class="labelCls" class="md:col-span-2">시스템 아키텍처 직접 배치 (행은 위→아래, 노드는 좌→우 연결 · 이미지·기본보다 우선)
+              <div v-if="!cur.architecture.length" class="mt-1 rounded-[10px] bg-[#F1F5F9] px-4 py-4 text-center text-[12px] font-normal text-slate-400">
+                비어 있음 — 아래 행 추가부터 시작하세요
+              </div>
+              <div v-for="(row, ri) in cur.architecture" :key="ri" class="mt-2 rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-[12.5px] font-bold text-slate-600">행 {{ ri + 1 }} · 노드 {{ row.nodes.length }}개</span>
+                  <div class="flex gap-1">
+                    <button class="rounded-[8px] border border-[#E2E8F0] bg-white px-2 py-1 text-[12px] font-bold text-slate-500 hover:text-[#2563EB] disabled:opacity-30" :disabled="ri === 0" title="위로" @click="moveArchRow(ri, -1)">↑</button>
+                    <button class="rounded-[8px] border border-[#E2E8F0] bg-white px-2 py-1 text-[12px] font-bold text-slate-500 hover:text-[#2563EB] disabled:opacity-30" :disabled="ri === cur.architecture.length - 1" title="아래로" @click="moveArchRow(ri, 1)">↓</button>
+                    <button class="rounded-[8px] border border-red-200 bg-white px-2 py-1 text-[12px] font-bold text-red-500" title="행 삭제" @click="delArchRow(ri)">✕</button>
+                  </div>
+                </div>
+                <div class="mt-2 grid gap-2 md:grid-cols-2">
+                  <div v-for="(n, ni) in row.nodes" :key="ni" class="rounded-[10px] border border-[#E2E8F0] bg-white p-3">
+                    <div class="flex items-center justify-between">
+                      <span class="text-[12px] font-bold text-slate-500">노드 {{ ni + 1 }}</span>
+                      <div class="flex gap-1">
+                        <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-slate-100 hover:text-[#2563EB] disabled:opacity-30" :disabled="ni === 0" title="왼쪽으로" @click="moveArchNode(ri, ni, -1)">←</button>
+                        <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-slate-100 hover:text-[#2563EB] disabled:opacity-30" :disabled="ni === row.nodes.length - 1" title="오른쪽으로" @click="moveArchNode(ri, ni, 1)">→</button>
+                        <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-300 hover:bg-red-50 hover:text-red-500" title="노드 삭제" @click="delArchNode(ri, ni)">✕</button>
+                      </div>
+                    </div>
+                    <select v-model="n.icon" :class="inputCls">
+                      <option v-for="ic in archIcons" :key="ic" :value="ic">{{ ic }}</option>
+                    </select>
+                    <input v-model="n.title" placeholder="제목 (예: AI Server)" :class="inputCls" />
+                    <input v-model="n.subtitle" placeholder="부제 (예: FastAPI / YOLO)" :class="inputCls" class="font-mono" />
+                    <label class="mt-1.5 flex cursor-pointer items-center gap-1.5 text-[12.5px] font-bold text-slate-600">
+                      <input v-model="n.accent" type="checkbox" class="h-4 w-4 accent-[#2563EB]" /> 강조(파랑)
+                    </label>
+                  </div>
+                </div>
+                <button class="mt-2 inline-flex items-center gap-1 rounded-[8px] border border-[#E2E8F0] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-600 hover:border-[#2563EB] hover:text-[#2563EB]" @click="addArchNode(ri)">
+                  <Plus :size="13" /> 노드 추가
+                </button>
+              </div>
+              <div class="mt-2">
+                <button class="inline-flex items-center gap-1 rounded-[10px] border border-[#E2E8F0] bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:border-[#2563EB] hover:text-[#2563EB]" @click="addArchRow">
+                  <Plus :size="14" /> 행 추가
+                </button>
+              </div>
+              <div v-if="archPreview.length" class="mt-2">
+                <p class="text-[12.5px] font-bold text-slate-600">미리보기 (상세 페이지 표시 그대로)</p>
+                <ArchitectureDiagram :rows="archPreview" class="mt-1" />
+              </div>
+            </div>
+            <div :class="labelCls" class="md:col-span-2">시스템 아키텍처 이미지 (직접 배치가 비어 있을 때만 표시)
+              <img
+                v-if="cur.architectureImage"
+                :src="cur.architectureImage"
+                alt="아키텍처 미리보기"
+                class="mt-1 w-full rounded-[10px] border border-[#E2E8F0] bg-white"
+              />
+              <div v-else class="mt-1 flex w-full items-center justify-center rounded-[10px] bg-[#F1F5F9] px-4 py-8 text-[12px] font-normal text-slate-400">
+                없음 — 상세 페이지에 기본 다이어그램이 표시됩니다
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#0F172A] px-4 py-2 text-[13px] font-semibold text-white">
+                  {{ thumbUploading ? '업로드 중…' : '이미지 업로드' }}
+                  <input type="file" accept="image/*" class="hidden" :disabled="thumbUploading" @change="uploadEditArchitecture" />
+                </label>
+                <button
+                  v-if="cur.architectureImage"
+                  class="rounded-[10px] border border-[#E2E8F0] bg-white px-4 py-2 text-[13px] font-semibold text-slate-500"
+                  @click="cur.architectureImage = ''"
+                >
+                  지우기
+                </button>
+              </div>
+              <p v-if="thumbMsg" class="mt-1.5 text-[12.5px] font-medium" :class="thumbErr ? 'text-red-600' : 'text-emerald-600'">{{ thumbMsg }}</p>
+              <input v-model="cur.architectureImage" placeholder="https://… 또는 업로드 (jpg/png/webp, 5MB 이하)" :class="inputCls" class="font-mono" />
+            </div>
+          </div>
+
+          <!-- ⑥ ERD -->
+          <div class="rounded-[14px] border border-[#E2E8F0] bg-white p-6">
+            <div class="mb-3 flex items-center gap-2.5">
+              <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[#2563EB] font-mono text-[13px] font-bold text-white">6</span>
+              <div>
+                <h3 class="text-[15px] font-bold text-slate-900">ERD</h3>
+                <p class="text-[12.5px] text-[#64748B]">테이블 직접 등록 또는 JSON (빈 목록이면 기본 ERD 표시)</p>
+              </div>
+            </div>
+            <div :class="labelCls" class="md:col-span-2">ERD 테이블 직접 등록 (빈 목록이면 기본 ERD 표시)
+              <datalist id="erd-col-types">
+                <option v-for="t in erdColTypes" :key="t" :value="t" />
+              </datalist>
+              <div v-if="!cur.erdTables.length" class="mt-1 rounded-[10px] bg-[#F1F5F9] px-4 py-4 text-center text-[12px] font-normal text-slate-400">
+                등록된 테이블 없음 — 아래 테이블 추가부터 시작하세요
+              </div>
+              <div v-for="(t, ti) in cur.erdTables" :key="ti" class="mt-2 overflow-hidden rounded-[12px] border border-[#E2E8F0]">
+                <div class="flex items-center justify-between gap-2 bg-[#0F172A] px-3.5 py-2.5">
+                  <span class="font-mono text-[13px] font-bold text-white">Table {{ ti + 1 }}{{ t.name ? ` · ${t.name}` : '' }}</span>
+                  <div class="flex gap-1">
+                    <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-30" :disabled="ti === 0" title="위로" @click="moveErdTable(ti, -1)">↑</button>
+                    <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-30" :disabled="ti === cur.erdTables.length - 1" title="아래로" @click="moveErdTable(ti, 1)">↓</button>
+                    <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-red-500/20 hover:text-red-300" title="테이블 삭제" @click="delErdTable(ti)">✕</button>
+                  </div>
+                </div>
+                <div class="grid gap-2 bg-white p-3 md:grid-cols-2">
+                  <input v-model="t.name" placeholder="테이블명 (예: orders)" :class="inputCls" class="mt-0 font-mono" />
+                  <input v-model="t.comment" placeholder="설명 (예: 주문)" :class="inputCls" class="mt-0" />
+                </div>
+                <div class="bg-[#F8FAFC] px-3 pb-3">
+                  <div v-for="(c, ci) in t.columns" :key="ci" class="mt-1.5 grid items-center gap-1.5 rounded-[10px] border border-[#E2E8F0] bg-white p-2 md:grid-cols-[130px_150px_1fr_auto]">
+                    <input v-model="c.name" placeholder="컬럼명 (예: user_id)" :class="inputCls" class="mt-0 font-mono" />
+                    <input v-model="c.type" list="erd-col-types" placeholder="자료형 (예: bigint)" :class="inputCls" class="mt-0 font-mono" />
+                    <div class="flex items-center gap-2.5 px-1">
+                      <label class="flex cursor-pointer items-center gap-1 text-[12px] font-bold" :class="c.pk ? 'text-amber-600' : 'text-slate-400'">
+                        <input v-model="c.pk" type="checkbox" class="h-3.5 w-3.5 accent-amber-500" /> PK
+                      </label>
+                      <label class="flex cursor-pointer items-center gap-1 text-[12px] font-bold" :class="c.fk ? 'text-[#1D4ED8]' : 'text-slate-400'">
+                        <input v-model="c.fk" type="checkbox" class="h-3.5 w-3.5 accent-[#2563EB]" /> FK
+                      </label>
+                      <label class="flex cursor-pointer items-center gap-1 text-[12px] font-bold" :class="c.uk ? 'text-violet-600' : 'text-slate-400'">
+                        <input v-model="c.uk" type="checkbox" class="h-3.5 w-3.5 accent-violet-500" /> UK
+                      </label>
+                    </div>
+                    <div class="flex gap-1">
+                      <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-slate-100 hover:text-[#2563EB] disabled:opacity-30" :disabled="ci === 0" title="위로" @click="moveErdColumn(ti, ci, -1)">↑</button>
+                      <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-400 hover:bg-slate-100 hover:text-[#2563EB] disabled:opacity-30" :disabled="ci === t.columns.length - 1" title="아래로" @click="moveErdColumn(ti, ci, 1)">↓</button>
+                      <button class="rounded-[6px] px-1.5 py-0.5 text-[12px] font-bold text-slate-300 hover:bg-red-50 hover:text-red-500" title="컬럼 삭제" @click="delErdColumn(ti, ci)">✕</button>
+                    </div>
+                  </div>
+                  <button class="mt-2 inline-flex items-center gap-1 rounded-[8px] border border-[#E2E8F0] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-600 hover:border-[#2563EB] hover:text-[#2563EB]" @click="addErdColumn(ti)">
+                    <Plus :size="13" /> 컬럼 추가
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <button class="inline-flex items-center gap-1 rounded-[10px] border border-[#E2E8F0] bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:border-[#2563EB] hover:text-[#2563EB]" @click="addErdTable">
+                  <Plus :size="14" /> 테이블 추가
+                </button>
+              </div>
+            </div>
+            <label :class="labelCls" class="md:col-span-2">erdTables (JSON) — 위 에디터와 동일 데이터, 직접 편집용<textarea v-model="erdJson" rows="6" :class="jsonCls" spellcheck="false" /></label>
+            <label :class="labelCls" class="md:col-span-2">ERD 관계 메모 (커스텀 ERD일 때만 표시, 비우면 숨김)<input v-model="cur.erdNote" placeholder="예: users 1 ── N orders" :class="inputCls" class="font-mono" /></label>
+            <div v-if="erdPreview?.length" class="md:col-span-2">
+              <p :class="labelCls">ERD 미리보기</p>
+              <div class="mt-1 rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-4">
+                <ErdDiagram :tables="erdPreview" :note="cur.erdNote" />
+              </div>
+            </div>
           </div>
           <p v-if="jsonError" class="mt-3 text-[13px] font-semibold text-red-600">{{ jsonError }}</p>
           <p class="mt-4 text-[12.5px] text-[#64748B]">저장은 상단의 전체 저장 버튼으로 — 프로젝트가 0개여도 저장됩니다.</p>
@@ -610,7 +1283,7 @@ function reloadPage() {
             <span v-for="n in 3" :key="n" :class="['h-1.5 flex-1 rounded-full', wstep >= n ? 'bg-[#2563EB]' : 'bg-slate-200']" />
           </div>
           <p class="mt-2 text-[12.5px] font-semibold text-[#2563EB]">
-            {{ wstep === 1 ? '1/3 기본 정보' : wstep === 2 ? '2/3 데모 연결' : '3/3 확인' }}
+            {{ wstep === 1 ? '1/3 기본 정보' : wstep === 2 ? '2/3 데모·미디어 연결' : '3/3 확인' }}
           </p>
 
           <!-- Step 1 -->
@@ -625,15 +1298,51 @@ function reloadPage() {
             <label :class="labelCls" class="md:col-span-2">짧은 설명<input v-model="wform.short" placeholder="카드에 보이는 한 줄" :class="inputCls" /></label>
             <label :class="labelCls" class="md:col-span-2">상세 설명<textarea v-model="wform.description" rows="3" placeholder="상세 페이지 상단에 보이는 설명" :class="inputCls" /></label>
             <label :class="labelCls">태그 (쉼표 구분)<input v-model="wform.tags" placeholder="YOLO, OCR, Vue" :class="inputCls" /></label>
-            <label :class="labelCls">기간<input v-model="wform.period" placeholder="2024.03 — 2024.11" :class="inputCls" /></label>
+            <div :class="labelCls">기간 (달력에서 연·월 선택)
+              <div class="mt-1 flex flex-wrap items-center gap-2">
+                <MonthPicker v-model="wizStart" placeholder="시작 연·월" />
+                <span class="font-normal text-slate-400">~</span>
+                <MonthPicker v-model="wizEnd" placeholder="종료 연·월" :disabled="wizOngoing" />
+                <label class="flex cursor-pointer items-center gap-1.5 text-[12.5px] font-bold text-slate-600">
+                  <input v-model="wizOngoing" type="checkbox" class="h-4 w-4 accent-[#2563EB]" /> 진행 중
+                </label>
+              </div>
+              <input v-model="wform.period" placeholder="2024.03 — 2024.11" :class="inputCls" class="font-mono" />
+            </div>
             <label :class="labelCls">개발 인원<input v-model="wform.team" placeholder="4인 (AI 2 · Backend 1 · Frontend 1)" :class="inputCls" /></label>
             <label :class="labelCls">주요 역할<input v-model="wform.role" placeholder="AI Pipeline · Backend API 설계" :class="inputCls" /></label>
             <label :class="labelCls" class="md:col-span-2">개발 목적<textarea v-model="wform.purpose" rows="2" :class="inputCls" /></label>
+            <div :class="labelCls" class="md:col-span-2">썸네일 이미지
+              <img
+                v-if="wform.thumbnail"
+                :src="wform.thumbnail"
+                alt="썸네일 미리보기"
+                class="mt-1 aspect-[16/9] w-full rounded-[10px] border border-[#E2E8F0] object-cover"
+              />
+              <div v-else class="mt-1 flex aspect-[16/9] w-full items-center justify-center rounded-[10px] bg-[#F1F5F9] text-[12px] font-normal text-slate-400">
+                없음 — 카드·상세 상단에 플레이스홀더가 표시됩니다
+              </div>
+              <div class="mt-2 flex items-center gap-2">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#0F172A] px-4 py-2 text-[13px] font-semibold text-white">
+                  {{ thumbUploading ? '업로드 중…' : '이미지 업로드' }}
+                  <input type="file" accept="image/*" class="hidden" :disabled="thumbUploading" @change="uploadWizardThumbnail" />
+                </label>
+                <button
+                  v-if="wform.thumbnail"
+                  class="rounded-[10px] border border-[#E2E8F0] bg-white px-4 py-2 text-[13px] font-semibold text-slate-500"
+                  @click="wform.thumbnail = ''"
+                >
+                  지우기
+                </button>
+              </div>
+              <p v-if="thumbMsg" class="mt-1.5 text-[12.5px] font-medium" :class="thumbErr ? 'text-red-600' : 'text-emerald-600'">{{ thumbMsg }}</p>
+              <input v-model="wform.thumbnail" placeholder="https://… 또는 업로드 (jpg/png/webp, 5MB 이하)" :class="inputCls" class="font-mono" />
+            </div>
           </div>
 
           <!-- Step 2 -->
           <div v-if="wstep === 2" class="mt-4">
-            <p :class="labelCls">데모 연결 방식</p>
+            <p :class="labelCls">데모 연결 방식 (택 1)</p>
             <div class="mt-2 grid gap-2 sm:grid-cols-2">
               <button
                 v-for="o in [
@@ -662,16 +1371,69 @@ function reloadPage() {
                 <iframe :src="wform.demoUrl.trim()" title="preview" class="aspect-[16/9] w-full bg-white" loading="lazy" />
               </div>
             </div>
+
+            <p :class="labelCls" class="mt-5">프로젝트 미디어 (갤러리 — 이미지·시연 영상, 최대 {{ MAX_GALLERY }}개 · 선택)</p>
+            <p class="mt-1 text-[12.5px] text-[#64748B]">파일로 올리거나 URL을 직접 추가하세요. 상세 페이지의 데모 화면 영역에 표시됩니다.</p>
+            <div v-if="wform.gallery.length" class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <div v-for="(g, i) in wform.gallery" :key="g + i" class="group relative overflow-hidden rounded-[10px] border border-[#E2E8F0]">
+                <video v-if="isVideoUrl(g)" :src="g" controls preload="metadata" class="aspect-[16/9] w-full bg-black object-cover" />
+                <img v-else :src="g" alt="갤러리 미리보기" class="aspect-[16/9] w-full object-cover" />
+                <button
+                  class="absolute right-1.5 top-1.5 rounded-[8px] bg-black/60 px-2 py-1 text-[11.5px] font-bold text-white opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+                  @click="wform.gallery.splice(i, 1)"
+                >
+                  삭제
+                </button>
+              </div>
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#0F172A] px-4 py-2 text-[13px] font-semibold text-white">
+                {{ mediaUploading ? '업로드 중…' : '이미지 업로드' }}
+                <input type="file" accept="image/*" multiple class="hidden" :disabled="mediaUploading" @change="uploadWizardGallery" />
+              </label>
+              <label class="inline-flex cursor-pointer items-center gap-2 rounded-[10px] bg-[#2563EB] px-4 py-2 text-[13px] font-semibold text-white">
+                {{ mediaUploading ? '업로드 중…' : '시연 영상 업로드' }}
+                <input type="file" accept="video/mp4,video/webm,video/quicktime" multiple class="hidden" :disabled="mediaUploading" @change="uploadWizardGallery" />
+              </label>
+            </div>
+            <div class="mt-2 flex gap-1.5">
+              <input
+                v-model="mediaUrl"
+                placeholder="https://… 이미지·영상 URL 직접 추가 후 +"
+                :class="inputCls" class="mt-0 flex-1 font-mono"
+                @keyup.enter="addGalleryUrl(wform.gallery)"
+              />
+              <button class="mt-0 shrink-0 rounded-[10px] bg-[#0F172A] px-3 text-white" title="URL 추가" @click="addGalleryUrl(wform.gallery)">
+                <Plus :size="16" />
+              </button>
+            </div>
+            <p v-if="mediaMsg" class="mt-1.5 text-[12.5px] font-medium" :class="mediaErr ? 'text-red-600' : 'text-emerald-600'">{{ mediaMsg }}</p>
           </div>
 
           <!-- Step 3 -->
           <div v-if="wstep === 3" class="mt-4 rounded-[12px] bg-[#F8FAFC] p-5 text-[13.5px] leading-relaxed">
+            <img
+              v-if="wform.thumbnail"
+              :src="wform.thumbnail"
+              alt="썸네일 미리보기"
+              class="mb-3 aspect-[16/9] w-full rounded-[10px] border border-[#E2E8F0] object-cover"
+            />
             <p><span class="font-bold">제목:</span> {{ wform.title }}</p>
             <p class="font-mono text-[12.5px] text-[#64748B]">/u/{{ myRow?.username }}/projects/{{ wform.slug }}</p>
             <p class="mt-1"><span class="font-bold">카테고리:</span> {{ wform.category }}</p>
+            <p><span class="font-bold">기간:</span> {{ wform.period || '미입력' }}</p>
             <p><span class="font-bold">데모:</span>
               {{ wform.demoType === 'internal' ? '내장 Live Demo' : wform.demoType === 'none' ? '없음' : wform.demoUrl }}
             </p>
+            <p><span class="font-bold">미디어:</span>
+              {{ wform.gallery.length ? `갤러리 ${wform.gallery.length}개 (${wform.gallery.filter(isVideoUrl).length}개 영상 포함)` : '없음' }}
+            </p>
+            <div v-if="wform.gallery.length" class="mt-2 grid grid-cols-3 gap-2">
+              <div v-for="(g, i) in wform.gallery.slice(0, 3)" :key="g + i" class="overflow-hidden rounded-[8px] border border-[#E2E8F0]">
+                <video v-if="isVideoUrl(g)" :src="g" preload="metadata" class="aspect-[16/9] w-full bg-black object-cover" />
+                <img v-else :src="g" alt="갤러리 미리보기" class="aspect-[16/9] w-full object-cover" />
+              </div>
+            </div>
             <p class="mt-2 text-[12.5px] text-[#64748B]">저장 후 상세 파이프라인·성능표·ERD는 목록의 JSON 편집으로 이어서 채울 수 있습니다.</p>
           </div>
 

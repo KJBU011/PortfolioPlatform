@@ -20,8 +20,9 @@ const link = computed(() => linkFn(`/projects/${props.project.slug}`))
 </script>
 
 <template>
-  <article
-    class="group flex flex-col overflow-hidden rounded-[16px] border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-1 hover:shadow-[0_12px_32px_rgba(37,99,235,0.12)]"
+  <RouterLink
+    :to="link"
+    class="group flex flex-col overflow-hidden rounded-[16px] border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-1 hover:border-[#93C5FD] hover:shadow-[0_12px_32px_rgba(37,99,235,0.12)]"
   >
     <div class="p-3 pb-0">
       <ImagePlaceholder v-if="!project.thumbnail" :label="`${project.title} 썸네일 영역`" ratio="aspect-[16/9]" />
@@ -36,13 +37,12 @@ const link = computed(() => linkFn(`/projects/${props.project.slug}`))
       <div class="mt-3 flex flex-wrap gap-1.5">
         <span v-for="t in project.tags.slice(0, 5)" :key="t" :class="tagClass(t)">#{{ t }}</span>
       </div>
-      <RouterLink
-    :to="link"
-        class="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-[#2563EB] hover:gap-2.5 hover:text-[#1D4ED8]"
+      <span
+        class="mt-4 inline-flex items-center gap-1.5 text-[14px] font-semibold text-[#2563EB] group-hover:gap-2.5 group-hover:text-[#1D4ED8]"
         style="transition: gap .2s"
       >
         프로젝트 보기 <ArrowRight :size="16" />
-      </RouterLink>
+      </span>
     </div>
-  </article>
+  </RouterLink>
 </template>

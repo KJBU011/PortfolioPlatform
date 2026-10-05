@@ -78,6 +78,11 @@ const defaultProjects: Project[] = [
       '전체 정확도를 단순히 높이기보다 실패한 데이터를 분석하여 Hard Sample을 구축하고 다음 모델 버전에 반영했다.',
     gallery: ['', '', ''],
     featured: true,
+    architectureImage: '',
+    erdTables: [],
+    erdNote: '',
+    architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   },
   {
     slug: 'tooltrace',
@@ -123,6 +128,11 @@ const defaultProjects: Project[] = [
     failureMessage: '현장에서 오검출된 이미지를 곧바로 수집해 Hard Sample으로 재학습하는 루프를 만들었다.',
     gallery: ['', ''],
     featured: true,
+    architectureImage: '',
+    erdTables: [],
+    erdNote: '',
+    architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   },
   {
     slug: 'predictive-maintenance',
@@ -167,6 +177,11 @@ const defaultProjects: Project[] = [
     failureMessage: '단순 임계치를 넘어 설비별 정상 패턴을 학습하도록 개선해 오탐을 줄였다.',
     gallery: ['', ''],
     featured: true,
+    architectureImage: '',
+    erdTables: [],
+    erdNote: '',
+    architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   },
   {
     slug: 'portfolio-platform',
@@ -199,6 +214,11 @@ const defaultProjects: Project[] = [
     failureMessage: '',
     gallery: [''],
     featured: false,
+    architectureImage: '',
+    erdTables: [],
+    erdNote: '',
+    architecture: [],
+    sectionVisibility: { overview: true, features: true, pipeline: true, system: true, erd: true },
   },
 ]
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, RouterLink } from 'vue-router'
 import {
   ArrowLeft, ArrowRight, Play, ExternalLink, Github, Sparkles,
   CheckCircle2, XCircle, TriangleAlert, Info, MonitorPlay,
+  ChevronLeft, ChevronRight,
 } from 'lucide-vue-next'
 import SectionTitle from '@/components/common/SectionTitle.vue'
 import ImagePlaceholder from '@/components/common/ImagePlaceholder.vue'
@@ -11,6 +12,7 @@ import PipelineFlow from '@/components/project/PipelineFlow.vue'
 import ArchitectureDiagram from '@/components/project/ArchitectureDiagram.vue'
 import ErdDiagram from '@/components/project/ErdDiagram.vue'
 import { cctvErd, cctvApiDemo } from '@/data/projects'
+import type { DetailSectionKey } from '@/types/project'
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useLinkBase } from '@/composables/useLinkBase'
 import {
@@ -43,13 +45,78 @@ const idx = computed(() => allProjects.value.findIndex((p) => p.slug === slug.va
 const prev = computed(() => (idx.value > 0 ? allProjects.value[idx.value - 1] : undefined))
 const next = computed(() => (idx.value >= 0 && idx.value < allProjects.value.length - 1 ? allProjects.value[idx.value + 1] : undefined))
 
-const sections = [
-  { id: 'overview', label: '개요' },
-  { id: 'features', label: '핵심 기능' },
-  { id: 'pipeline', label: 'AI 파이프라인' },
-  { id: 'system', label: '시스템 구조' },
-  { id: 'erd', label: 'ERD · API' },
-]
+/** 관리 페이지 공개 설정 — 키 누락(구 저장분)은 표시로 간주 */
+function isSec(k: DetailSectionKey) {
+  return project.value?.sectionVisibility?.[k] ?? true
+}
+
+const sections = computed(() =>
+  (
+    [
+      { id: 'overview', label: '개요' },
+      { id: 'features', label: '핵심 기능' },
+      { id: 'pipeline', label: 'AI 파이프라인' },
+      { id: 'system', label: '시스템 구조' },
+      { id: 'erd', label: 'ERD · API' },
+    ] as { id: DetailSectionKey; label: string }[]
+  ).filter((s) => isSec(s.id)),
+)
+
+function isVideoUrl(url: string) {
+  return /\.(mp4|webm|mov)(\?|#|$)/i.test(url ?? '') || /\/demo-video(\?|#|$)/i.test(url ?? '')
+}
+
+/** 직접 배치된 아키텍처 (빈 행 제외) — 있으면 이미지·기본보다 우선 표시 */
+const customArch = computed(() => (project.value?.architecture ?? []).filter((r) => (r.nodes ?? []).length > 0))
+
+/** 갤러리 뷰어: 빈 값 제외, 아래 썸네일 클릭 → 위 큰 화면에 표시 */
+const galleryItems = computed(() => (project.value?.gallery ?? []).filter((g) => (g ?? '').trim()))
+const selectedShot = ref(0)
+watch(slug, () => { selectedShot.value = 0 })
+const activeShot = computed(() => galleryItems.value[Math.min(selectedShot.value, galleryItems.value.length - 1)] ?? '')
+
+/** 썸네일 스트립 캐러셀: 넘칠 때만 화살표 표시, 선택 항목으로 자동 스크롤 */
+const stripRef = ref<HTMLElement | null>(null)
+const canPrev = ref(false)
+const canNext = ref(false)
+
+function updateArrows() {
+  const el = stripRef.value
+  if (!el) {
+    canPrev.value = false
+    canNext.value = false
+    return
+  }
+  canPrev.value = el.scrollLeft > 4
+  canNext.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4
+}
+
+function slideStrip(dir: 1 | -1) {
+  const el = stripRef.value
+  if (!el) return
+  el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' })
+}
+
+function onResize() {
+  updateArrows()
+}
+
+watch(selectedShot, () => {
+  nextTick(() => {
+    stripRef.value?.children?.[selectedShot.value]?.scrollIntoView({
+      behavior: 'smooth', inline: 'center', block: 'nearest',
+    })
+  })
+})
+watch(galleryItems, () => nextTick(updateArrows))
+
+onMounted(() => {
+  nextTick(updateArrows)
+  window.addEventListener('resize', onResize)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+})
 
 function methodClass(m: string) {
   return m === 'GET'
@@ -172,7 +239,7 @@ function methodClass(m: string) {
 
     <div class="mx-auto max-w-6xl space-y-14 px-5 pt-10">
       <!-- ═══ 프로젝트 개요 ═══ -->
-      <section id="overview" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8" style="border-radius: 16px">
+      <section v-if="isSec('overview')" id="overview" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8" style="border-radius: 16px">
         <SectionTitle eyebrow="Overview" title="프로젝트 개요" />
         <dl class="mt-6 overflow-hidden rounded-[12px] border border-[#E2E8F0]">
           <div v-for="row in [
@@ -188,7 +255,7 @@ function methodClass(m: string) {
       </section>
 
       <!-- ═══ 05 핵심 기능 + 데모 화면 ═══ -->
-      <section id="features" class="scroll-mt-32">
+      <section v-if="isSec('features')" id="features" class="scroll-mt-32">
         <SectionTitle eyebrow="Features" title="핵심 기능" desc="실제 관제 업무에서 필요한 주요 기능을 구현했습니다." />
         <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div v-for="(f, i) in project.features" :key="f.title" class="rounded-[16px] border border-[#E2E8F0] bg-white p-5">
@@ -204,7 +271,75 @@ function methodClass(m: string) {
         </div>
         <h3 class="mt-8 text-[17px] font-bold text-slate-900">데모 화면</h3>
         <div class="mt-3 rounded-[16px] border border-[#E2E8F0] bg-white p-4">
+          <!-- 갤러리가 있으면: 아래 썸네일 클릭 → 위 큰 화면에 표시 -->
+          <div v-if="galleryItems.length">
+            <div class="aspect-[16/9] w-full overflow-hidden rounded-[12px] border border-[#E2E8F0] bg-black">
+              <video
+                v-if="isVideoUrl(activeShot)"
+                :key="activeShot"
+                :src="activeShot"
+                controls
+                preload="metadata"
+                class="h-full w-full object-contain"
+              />
+              <img
+                v-else
+                :key="activeShot"
+                :src="activeShot"
+                :alt="`${project.title} 데모 화면 ${selectedShot + 1}`"
+                class="h-full w-full object-contain"
+              />
+            </div>
+            <div class="relative">
+              <div
+                ref="stripRef"
+                class="nice-scroll mt-3 flex scroll-smooth gap-3 overflow-x-auto px-1 pb-1 pt-1"
+                @scroll="updateArrows"
+              >
+                <button
+                  v-for="(g, i) in galleryItems"
+                  :key="g + i"
+                  :class="[
+                    'relative w-56 shrink-0 overflow-hidden rounded-[12px] border text-left transition-all',
+                    i === Math.min(selectedShot, galleryItems.length - 1)
+                      ? 'border-[#2563EB] ring-2 ring-[#2563EB]/40'
+                      : 'border-[#E2E8F0] hover:border-[#93C5FD]',
+                  ]"
+                  @click="selectedShot = i"
+                >
+                  <video v-if="isVideoUrl(g)" :src="g" preload="metadata" muted playsinline class="aspect-[16/9] w-full bg-black object-cover" />
+                  <img v-else :src="g" :alt="`갤러리 ${i + 1}`" class="aspect-[16/9] w-full object-cover" loading="lazy" />
+                  <span
+                    v-if="isVideoUrl(g)"
+                    class="pointer-events-none absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white"
+                  >
+                    <Play :size="16" class="ml-0.5" />
+                  </span>
+                </button>
+              </div>
+              <button
+                v-if="canPrev"
+                type="button"
+                aria-label="이전 썸네일"
+                class="absolute left-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E2E8F0] bg-white/95 text-slate-700 shadow-[0_4px_16px_rgba(15,23,42,0.18)] transition-colors hover:border-[#2563EB] hover:bg-[#EFF6FF] hover:text-[#1D4ED8]"
+                @click="slideStrip(-1)"
+              >
+                <ChevronLeft :size="20" />
+              </button>
+              <button
+                v-if="canNext"
+                type="button"
+                aria-label="다음 썸네일"
+                class="absolute right-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[#E2E8F0] bg-white/95 text-slate-700 shadow-[0_4px_16px_rgba(15,23,42,0.18)] transition-colors hover:border-[#2563EB] hover:bg-[#EFF6FF] hover:text-[#1D4ED8]"
+                @click="slideStrip(1)"
+              >
+                <ChevronRight :size="20" />
+              </button>
+            </div>
+          </div>
+          <!-- 갤러리가 없으면 기존처럼 데모 연결 플레이스홀더 -->
           <component
+            v-else
             :is="demoExternal ? 'a' : 'RouterLink'"
             :to="demoExternal ? undefined : demoPath"
             :href="demoExternal ? demoUrl : undefined"
@@ -212,16 +347,11 @@ function methodClass(m: string) {
             :rel="demoExternal ? 'noreferrer' : undefined"
           >            <ImagePlaceholder label="Dashboard Demo Screenshot — 클릭하면 Live Demo로 이동" ratio="aspect-[21/9]" />
           </component>
-          <div class="nice-scroll mt-3 flex gap-3 overflow-x-auto pb-1">
-            <div v-for="(g, i) in project.gallery" :key="i" class="w-56 shrink-0">
-              <ImagePlaceholder :label="`Thumbnail ${i + 1}`" ratio="aspect-[16/9]" />
-            </div>
-          </div>
         </div>
       </section>
 
       <!-- ═══ 06 AI 파이프라인 + 성능 + 실패 분석 ═══ -->
-      <section id="pipeline" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
+      <section v-if="isSec('pipeline')" id="pipeline" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
         <SectionTitle eyebrow="AI Pipeline" title="AI 모델 파이프라인" desc="차량 탐색부터 번호판 인식까지의 전체 파이프라인을 구축했습니다." />
         <PipelineFlow :steps="project.pipeline" class="mt-6" />
 
@@ -279,15 +409,27 @@ function methodClass(m: string) {
       </section>
 
       <!-- ═══ 07 시스템 아키텍처 ═══ -->
-      <section id="system" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
+      <section v-if="isSec('system')" id="system" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
         <SectionTitle eyebrow="Architecture" title="시스템 아키텍처" desc="AI, Backend, DB, Frontend가 유기적으로 연결된 구조로 설계했습니다." />
-        <ArchitectureDiagram class="mt-6" />
+        <ArchitectureDiagram v-if="customArch.length" :rows="customArch" class="mt-6" />
+        <img
+          v-else-if="project.architectureImage"
+          :src="project.architectureImage"
+          :alt="`${project.title} 시스템 아키텍처`"
+          class="mt-6 w-full rounded-[16px] border border-[#E2E8F0] bg-white"
+          loading="lazy"
+        />
+        <ArchitectureDiagram v-else class="mt-6" />
       </section>
 
       <!-- ═══ 07 ERD + API ═══ -->
-      <section id="erd" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
+      <section v-if="isSec('erd')" id="erd" class="scroll-mt-32 rounded-[16px] border border-[#E2E8F0] bg-white p-6 md:p-8">
         <SectionTitle eyebrow="Database" title="ERD (주요 테이블)" />
-        <ErdDiagram :tables="cctvErd" class="mt-6" />
+        <ErdDiagram
+          :tables="(project.erdTables ?? []).length ? project.erdTables : cctvErd"
+          :note="(project.erdTables ?? []).length ? (project.erdNote ?? '') : undefined"
+          class="mt-6"
+        />
 
         <h3 class="mt-10 text-[17px] font-bold text-slate-900">API (Demo)</h3>
         <p class="mt-1 text-[13px] text-[#64748B]">실제 운영 API가 아닌 포트폴리오 시연용. 상세한 API 명세는 연동 시 제공됩니다.</p>

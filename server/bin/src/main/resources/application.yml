@@ -1,0 +1,41 @@
+server:
+  # 8080은 이 PC에서 이미 사용 중이라 8081 사용
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  health:
+    # 메일은 CONTACT_TO 없이 로그만 적재하므로 헬스에서 제외
+    mail:
+      enabled: false
+
+app:
+  cors:
+    allowed-origins: http://localhost:2782
+  contact:
+    # 수신 메일 (비워두면 발송 없이 로그만). 환경변수로 주입 권장:
+    #   CONTACT_TO, SPRING_MAIL_HOST/PORT/USERNAME/PASSWORD
+    to: ${CONTACT_TO:}
+
+spring:
+  # Supabase Postgres — 비워두면 DB 스택 없이 부팅 (DbUrlCondition).
+  # 예: jdbc:postgresql://aws-0-xxx.pooler.supabase.com:6543/postgres
+  datasource:
+    url: ${DATABASE_URL:}
+    username: ${DB_USER:}
+    password: ${DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  mail:
+    host: ${SPRING_MAIL_HOST:}
+    port: ${SPRING_MAIL_PORT:587}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
