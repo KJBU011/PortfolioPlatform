@@ -1,6 +1,6 @@
 server:
-  # 8080은 이 PC에서 이미 사용 중이라 8081 사용
-  port: 8081
+  # 8080은 이 PC에서 이미 사용 중이라 3000 사용
+  port: 3000
 
 management:
   endpoints:

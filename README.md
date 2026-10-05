@@ -5,7 +5,7 @@
 ```
 portfolio/
   client/   Vue 3 + Vite + TS (포트 :2782)
-  server/   Spring Boot 3.5 + Java 17 (포트 :8081)
+  server/   Spring Boot 3.5 + Java 17 (포트 :3000)
 ```
 
 ## 실행
@@ -21,7 +21,7 @@ npm install
 npm run dev      # http://localhost:2782
 ```
 
-client의 `/api/*`는 Vite proxy로 `http://localhost:8081`에 연결된다.
+client의 `/api/*`는 Vite proxy로 `http://localhost:3000`에 연결된다.
 
 ## 구성
 
